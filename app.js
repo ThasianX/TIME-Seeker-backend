@@ -1,37 +1,142 @@
 const express = require("express");
-const { validationResult, query } = require("express-validator");
 const axios = require("axios");
+const cron = require("node-cron");
+const {
+    hasUser,
+    addNewEntry,
+    addNewUser,
+    getUserHistory,
+    getAllUsers,
+    connect,
+} = require("./redis");
 
 const app = express();
+const hostname = "127.0.0.1";
 const port = 3000;
 
-app.get("/user", query("accountPubKey").isString(), async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-    }
+const HTTP_STATUS = {
+    OK: 200,
+    BAD_REQUEST: 400,
+    NOT_FOUND: 404,
+};
 
-    const { accountPubKey } = req.query;
-    const assets = await loadAccountAssets(accountPubKey);
-    res.send(assets);
+const getAccountPubKey = (req) => {
+    return req.query.accountPubKey.toLowerCase();
+};
+
+app.get("/user/assets", async (req, res) => {
+    const accountPubKey = getAccountPubKey(req);
+
+    const response = await loadWonderland(accountPubKey);
+
+    if (response.status === HTTP_STATUS.OK) {
+        const info = await loadAccountInfo(response.data);
+        res.send(info);
+    } else {
+        res.status(response.status).send({ error: response.message });
+    }
 });
 
-app.listen(port, () => {
-    console.log(`Example app listening at http://localhost:${port}`);
+app.get("/user/history", async (req, res) => {
+    const accountPubKey = getAccountPubKey(req);
+
+    const userExists = await hasUser(accountPubKey);
+    if (!userExists) {
+        return res
+            .status(HTTP_STATUS.BAD_REQUEST)
+            .send({ error: "User does not exist" });
+    }
+
+    const history = await getUserHistory(accountPubKey);
+    res.send(history);
+});
+
+app.post("/users", async (req, res) => {
+    const accountPubKey = getAccountPubKey(req);
+
+    const response = await loadWonderland(accountPubKey);
+
+    if (response.status === HTTP_STATUS.OK) {
+        const userExists = await hasUser(accountPubKey);
+        if (!userExists) {
+            const timestamp = new Date().getTime();
+            await addNewUser(
+                accountPubKey,
+                timestamp,
+                getNetWorth(response.data)
+            );
+        }
+
+        const info = await loadAccountInfo(response.data);
+        res.send(info);
+    } else {
+        res.status(response.status).send({ error: response.message });
+    }
+});
+
+app.listen(port, hostname, () => {
+    connect();
+    console.log(`Server running at http://${hostname}:${port}/`);
 });
 
 const BASE_URL =
-    "https://api.zapper.fi/v1/protocols/wonderland/balances?network=avalanche&api_key=96e0cc51-a62e-42ca-acee-910ea7d2a241";
+    "https://api.zapper.fi/v1/protocols/wonderland/balances?network=avalanche&api_key=96e0cc51-a62e-42ca-acee-910ea7d2a241&newBalances=true";
 
-const loadAccountAssets = async (accountPubKey) => {
+const loadWonderland = async (accountPubKey) => {
     const url = BASE_URL + "&addresses%5B%5D=" + accountPubKey;
-    const { data } = await axios.get(url.toString());
 
-    const responseAssets = data[accountPubKey].products.find((product) => {
-        return product.label === "Wonderland";
-    }).assets;
+    try {
+        const { data } = await axios.get(url.toString());
 
-    const assets = responseAssets.reduce((acc, asset) => {
+        const wonderlandProduct = data[accountPubKey].products.find(
+            (product) => {
+                return product.label === "Wonderland";
+            }
+        );
+
+        if (
+            wonderlandProduct === undefined ||
+            wonderlandProduct?.assets?.length === 0
+        ) {
+            return {
+                status: HTTP_STATUS.NOT_FOUND,
+                message: "Account does not hold Wonderland assets",
+            };
+        }
+
+        const wonderlandAsset = wonderlandProduct.assets.find(
+            (asset) => asset.appId === "wonderland"
+        );
+
+        if (wonderlandAsset === undefined) {
+            return {
+                status: HTTP_STATUS.NOT_FOUND,
+                message: "Account does not hold Wonderland assets",
+            };
+        }
+
+        return {
+            status: HTTP_STATUS.OK,
+            data: wonderlandAsset,
+        };
+    } catch (error) {
+        if (error.response) {
+            return {
+                status: error.response.status,
+                message: "Address must be a valid avalanche address",
+            };
+        } else if (error.request) {
+            console.log(error.request);
+        } else {
+            console.log("Error", error.message);
+        }
+        const { request, ...errorObject } = response;
+        console.log(errorObject);
+    }
+};
+
+const loadAccountInfo = async (wonderlandAsset) => {
+    const assets = wonderlandAsset.tokens.reduce((acc, asset) => {
         const iAsset = {
             token: asset.symbol,
             price: asset.price,
@@ -56,11 +161,30 @@ const loadAccountAssets = async (accountPubKey) => {
         return [...acc, iAsset];
     }, []);
 
-    return assets;
+    return {
+        assets,
+        balanceUSD: getNetWorth(wonderlandAsset),
+    };
 };
 
-const getNetWorth = (assets) => {
-    return assets.reduce((acc, asset) => {
-        return acc + asset.balance * asset.price;
-    }, 0);
+const getNetWorth = (wonderlandAsset) => {
+    return wonderlandAsset.balanceUSD;
 };
+
+const setForAll = async () => {
+    const users = await getAllUsers();
+    const timestamp = new Date().getTime();
+    for (const user of users) {
+        loadWonderland(accountPubKey).then((response) => {
+            if (response.status === HTTP_STATUS.OK) {
+                const netWorth = getNetWorth(response.data);
+                addNewEntry(user, timestamp, netWorth);
+            }
+        });
+    }
+};
+
+cron.schedule("30 0 1,9,17 * * *", setForAll, {
+    scheduled: true,
+    timezone: "America/New_York",
+});

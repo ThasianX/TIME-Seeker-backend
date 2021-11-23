@@ -12,7 +12,7 @@ const {
 
 const app = express();
 const hostname = "127.0.0.1";
-const port = 3000;
+const port = 3001;
 
 const HTTP_STATUS = {
     OK: 200,
@@ -74,7 +74,7 @@ app.post("/users", async (req, res) => {
     }
 });
 
-app.listen(port, hostname, () => {
+app.listen(port, () => {
     connect();
     console.log(`Server running at http://${hostname}:${port}/`);
 });

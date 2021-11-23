@@ -24,6 +24,11 @@ const getAccountPubKey = (req) => {
     return req.query.accountPubKey.toLowerCase();
 };
 
+app.get("/users", async (req, res) => {
+    const users = await getAllUsers();
+    return res.send(users);
+});
+
 app.get("/user/assets", async (req, res) => {
     const accountPubKey = getAccountPubKey(req);
 

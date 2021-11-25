@@ -89,9 +89,11 @@ const BASE_URL =
 
 const loadWonderland = async (accountPubKey) => {
     const url = BASE_URL + "&addresses%5B%5D=" + accountPubKey;
+    console.log(url);
 
     try {
         const { data } = await axios.get(url.toString());
+        console.log(data);
 
         const wonderlandProduct = data[accountPubKey].products.find(
             (product) => {
@@ -180,7 +182,7 @@ const setForAll = async () => {
     const users = await getAllUsers();
     const timestamp = new Date().getTime();
     for (const user of users) {
-        loadWonderland(accountPubKey).then((response) => {
+        loadWonderland(user).then((response) => {
             if (response.status === HTTP_STATUS.OK) {
                 const netWorth = getNetWorth(response.data);
                 addNewEntry(user, timestamp, netWorth);
